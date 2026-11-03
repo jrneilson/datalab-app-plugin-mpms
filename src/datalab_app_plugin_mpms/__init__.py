@@ -1,6 +1,6 @@
 """datalab blocks for Quantum Design MPMS / MPMS3 magnetometry data"""
 
 from ._version import __version__
-from .blocks import ExampleDataBlock
+from .blocks import MPMSBlock
 
-__all__ = ("__version__", "ExampleDataBlock")
+__all__ = ("__version__", "MPMSBlock")
