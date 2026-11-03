@@ -32,6 +32,7 @@ TIME = "Time (s)"
 X_AXES = (TEMPERATURE, FIELD, TIME)
 QUANTITIES = ("M", "χ", "1/χ")
 NO_ERROR = "None"
+WIDGET_WIDTH = 240
 
 FILTER_KEYS = {
     TEMPERATURE: "filter_temperature",
@@ -265,12 +266,16 @@ class MPMSBlock(DataBlock):
 
         def text_input(key: str, title: str) -> TextInput:
             value = self.data.get(key)
-            widget = TextInput(title=title, value="" if value is None else f"{value:g}")
+            widget = TextInput(
+                title=title, value="" if value is None else f"{value:g}", width=WIDGET_WIDTH
+            )
             widget.js_on_change("value", CustomJS(code=_js_update_setting(key, self.block_id)))
             return widget
 
         def select(key: str, title: str, options) -> Select:
-            widget = Select(title=title, value=self.data[key], options=list(options))
+            widget = Select(
+                title=title, value=self.data[key], options=list(options), width=WIDGET_WIDTH
+            )
             widget.js_on_change("value", CustomJS(code=_js_update_setting(key, self.block_id)))
             return widget
 
@@ -291,6 +296,9 @@ class MPMSBlock(DataBlock):
         source = ColumnDataSource(
             {
                 "x": out[x_axis].to_numpy(),
+                "time": out[TIME].to_numpy(),
+                "temperature": out[TEMPERATURE].to_numpy(),
+                "field": out[FIELD].to_numpy(),
                 "y": y,
                 "upper": y + y_err,
                 "lower": y - y_err,
@@ -304,7 +312,14 @@ class MPMSBlock(DataBlock):
         p.circle("x", "y", source=source, size=4)
         p.add_layout(Whisker(source=source, base="x", upper="upper", lower="lower", line_alpha=0.5))
         p.add_tools(
-            HoverTool(tooltips=[(x_axis, "@x{0.0000}"), (y_label, "@y{0.0000e} ± @err{0.0e}")])
+            HoverTool(
+                tooltips=[
+                    (TIME, "@time{0.0}"),
+                    (TEMPERATURE, "@temperature{0.000}"),
+                    (FIELD, "@field{0.00}"),
+                    (y_label, "@y{0.0000e} ± @err{0.0e}"),
+                ]
+            )
         )
 
         columns = numeric_columns(df)
@@ -319,36 +334,33 @@ class MPMSBlock(DataBlock):
 
         return column(
             Div(text="<b>Sample</b> (density is used only for T)"),
+            row(text_input("mass_mg", "Mass (mg)"), text_input("mass_err_mg", "± mass (mg)")),
+            row(text_input("formula_weight", "Formula weight (g/mol)")),
             row(
-                text_input("mass_mg", "Mass (mg)"),
-                text_input("mass_err_mg", "± mass (mg)"),
-                text_input("formula_weight", "Formula weight (g/mol)"),
                 text_input("density", "Density (g/cm³)"),
                 text_input("density_err", "± density (g/cm³)"),
-                sizing_mode="scale_width",
             ),
             Div(text="<b>Plot</b>"),
             row(
                 select("x_axis", "X axis", X_AXES),
                 select("quantity", "Quantity", QUANTITIES),
                 select("unit", "Magnetization unit", UNITS),
-                sizing_mode="scale_width",
             ),
             row(
                 select("moment_column", "Moment column (emu)", columns),
                 select("error_column", "Moment error column (emu)", [NO_ERROR, *columns]),
+            ),
+            row(
                 select("temperature_column", "Temperature column", columns),
                 select("field_column", "Field column", columns),
-                sizing_mode="scale_width",
             ),
             Div(text="<b>Filter</b> (leave blank for no limit)"),
-            row(
-                *(
-                    text_input(f"{key}_{bound}", f"{variable} {'≥' if bound == 'min' else '≤'}")
-                    for variable, key in FILTER_KEYS.items()
-                    for bound in ("min", "max")
-                ),
-                sizing_mode="scale_width",
+            *(
+                row(
+                    text_input(f"{key}_min", f"{variable} ≥"),
+                    text_input(f"{key}_max", f"{variable} ≤"),
+                )
+                for variable, key in FILTER_KEYS.items()
             ),
             export,
             p,
