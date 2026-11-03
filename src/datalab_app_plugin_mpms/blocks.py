@@ -78,6 +78,80 @@ link.click();
 document.body.removeChild(link);
 """
 
+AXIS_MENU_CALLBACK = """
+// Open a menu of plot choices when the x or y axis (outside the plot frame) is clicked.
+const [x0, x1] = [Math.min(xr.start, xr.end), Math.max(xr.start, xr.end)];
+const [y0, y1] = [Math.min(yr.start, yr.end), Math.max(yr.start, yr.end)];
+const in_x = cb_obj.x >= x0 && cb_obj.x <= x1;
+const in_y = cb_obj.y >= y0 && cb_obj.y <= y1;
+let options = null;
+if (in_x && cb_obj.y < y0) options = menus.x;
+else if (in_y && cb_obj.x < x0) options = menus.y;
+if (options === null) return;
+
+document.getElementById("mpms-axis-menu")?.remove();
+// tap coordinates are relative to the plot canvas
+const canvas = document.querySelector(".mpms-" + block_id + " .bk-canvas-events");
+const rect = canvas ? canvas.getBoundingClientRect() : {left: 0, top: 0};
+const menu = document.createElement("div");
+menu.id = "mpms-axis-menu";
+Object.assign(menu.style, {
+    position: "absolute", zIndex: 10000, background: "#fff", border: "1px solid #ccc",
+    borderRadius: "4px", boxShadow: "0 2px 8px rgba(0,0,0,0.15)", padding: "4px 0",
+    fontSize: "14px", whiteSpace: "nowrap",
+    left: (rect.left + window.scrollX + cb_obj.sx) + "px",
+    top: (rect.top + window.scrollY + cb_obj.sy) + "px",
+});
+for (const option of options) {
+    const item = document.createElement("div");
+    item.textContent = (option.current ? "✓ " : "\u2003") + option.label;
+    Object.assign(item.style, {padding: "4px 12px", cursor: "pointer"});
+    item.onmouseenter = () => { item.style.background = "#e9ecef"; };
+    item.onmouseleave = () => { item.style.background = ""; };
+    item.onclick = (e) => {
+        e.stopPropagation();
+        menu.remove();
+        const detail = Object.assign({block_id: block_id, event_name: "update_settings"}, option.settings);
+        document.dispatchEvent(new CustomEvent("block-event", {detail: detail, bubbles: true}));
+    };
+    menu.appendChild(item);
+}
+document.body.appendChild(menu);
+setTimeout(() => document.addEventListener("pointerdown", function close(e) {
+    if (!menu.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener("pointerdown", close);
+    }
+}), 0);
+"""
+
+# datalab restyles Bokeh widgets with Bootstrap classes after rendering, which changes their
+# size after Bokeh has laid them out; restore Bokeh's geometry within this block.
+WIDGET_STYLE = """<style>
+.mpms-block .input-group.form-inline.col-sm-6 {
+    flex: none; max-width: none; width: 100%; height: 100%; padding: 0;
+    display: inline-flex; flex-direction: column; flex-wrap: nowrap;
+    align-items: stretch; white-space: nowrap;
+}
+.mpms-block .input-group > label { justify-content: flex-start; }
+.mpms-block .input-group > select.form-control {
+    margin-left: 0 !important; width: 100%; height: auto; min-height: 31px;
+    padding: 0 12px; font-size: inherit;
+}
+</style>"""
+
+
+def _y_columns(quantity: str, unit: str) -> tuple[str, str]:
+    """The output column names for the plotted quantity and its uncertainty."""
+    if quantity == "M":
+        return f"M ({unit})", f"σM ({unit})"
+    if quantity == "χ":
+        return f"χ ({SUSCEPTIBILITY_UNITS[unit]})", f"σχ ({SUSCEPTIBILITY_UNITS[unit]})"
+    return (
+        f"1/χ ({INVERSE_SUSCEPTIBILITY_UNITS[unit]})",
+        f"σ(1/χ) ({INVERSE_SUSCEPTIBILITY_UNITS[unit]})",
+    )
+
 
 def _js_update_setting(key: str, block_id: str) -> str:
     """A Bokeh JS callback that sends a widget's value to the block's `update_settings` event."""
@@ -281,15 +355,7 @@ class MPMSBlock(DataBlock):
 
         quantity = self.data["quantity"]
         x_axis = self.data["x_axis"]
-        if quantity == "M":
-            y_label = f"M ({unit})"
-            y_err_label = f"σM ({unit})"
-        elif quantity == "χ":
-            y_label = f"χ ({SUSCEPTIBILITY_UNITS[unit]})"
-            y_err_label = f"σχ ({SUSCEPTIBILITY_UNITS[unit]})"
-        else:
-            y_label = f"1/χ ({INVERSE_SUSCEPTIBILITY_UNITS[unit]})"
-            y_err_label = f"σ(1/χ) ({INVERSE_SUSCEPTIBILITY_UNITS[unit]})"
+        y_label, y_err_label = _y_columns(quantity, unit)
 
         y = out[y_label].to_numpy()
         y_err = out[y_err_label].to_numpy()
@@ -307,7 +373,10 @@ class MPMSBlock(DataBlock):
         )
 
         p = figure(
-            x_axis_label=x_axis, y_axis_label=y_label, sizing_mode="scale_width", aspect_ratio=1.5
+            x_axis_label=f"{x_axis} ▾",
+            y_axis_label=f"{y_label} ▾",
+            sizing_mode="scale_width",
+            aspect_ratio=1.5,
         )
         p.circle("x", "y", source=source, size=4)
         p.add_layout(Whisker(source=source, base="x", upper="upper", lower="lower", line_alpha=0.5))
@@ -322,6 +391,27 @@ class MPMSBlock(DataBlock):
             )
         )
 
+        menus = {
+            "x": [{"label": x, "settings": {"x_axis": x}, "current": x == x_axis} for x in X_AXES],
+            "y": [
+                {
+                    "label": _y_columns(q, u)[0],
+                    "settings": {"quantity": q, "unit": u},
+                    "current": (q, u) == (quantity, unit),
+                }
+                for q in QUANTITIES
+                for u in UNITS
+                if f"M ({u})" in out
+            ],
+        }
+        p.js_on_event(
+            "tap",
+            CustomJS(
+                args=dict(xr=p.x_range, yr=p.y_range, menus=menus, block_id=self.block_id),
+                code=AXIS_MENU_CALLBACK,
+            ),
+        )
+
         columns = numeric_columns(df)
         export = Button(
             label="Export converted data (.csv)", button_type="primary", width_policy="min"
@@ -333,6 +423,7 @@ class MPMSBlock(DataBlock):
         )
 
         return column(
+            Div(text=WIDGET_STYLE),
             Div(text="<b>Sample</b> (density is used only for T)"),
             row(text_input("mass_mg", "Mass (mg)"), text_input("mass_err_mg", "± mass (mg)")),
             row(text_input("formula_weight", "Formula weight (g/mol)")),
@@ -340,12 +431,7 @@ class MPMSBlock(DataBlock):
                 text_input("density", "Density (g/cm³)"),
                 text_input("density_err", "± density (g/cm³)"),
             ),
-            Div(text="<b>Plot</b>"),
-            row(
-                select("x_axis", "X axis", X_AXES),
-                select("quantity", "Quantity", QUANTITIES),
-                select("unit", "Magnetization unit", UNITS),
-            ),
+            Div(text="<b>Data columns</b>"),
             row(
                 select("moment_column", "Moment column (emu)", columns),
                 select("error_column", "Moment error column (emu)", [NO_ERROR, *columns]),
@@ -363,6 +449,8 @@ class MPMSBlock(DataBlock):
                 for variable, key in FILTER_KEYS.items()
             ),
             export,
+            Div(text="Click the x or y axis to change what is plotted."),
             p,
             sizing_mode="scale_width",
+            css_classes=["mpms-block", f"mpms-{self.block_id}"],
         )
