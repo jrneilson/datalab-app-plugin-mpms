@@ -73,7 +73,7 @@ def test_block_plot_and_settings():
     block.generate_plot(location=MPMS3_FILE)
     assert block.data["bokeh_plot_data"]
     assert block.data["mass_mg"] == pytest.approx(0.347)
-    assert block.data["formula_weight"] is None
+    assert block._number("formula_weight") is None
     assert block.data["moment_column"] == "Moment (emu)"
     assert block.data["error_column"] == "M. Std. Err. (emu)"
 
@@ -100,3 +100,20 @@ def test_block_plot_and_settings():
 
     block.process_events({"event_name": "update_settings", "mass_mg": "-1"})
     assert block.data["errors"]
+
+
+def test_cleared_filters_stay_cleared():
+    """Emulate datalab's web app, which merges each server response into its stored copy of
+    the block (`Object.assign`) and sends that copy back with the next event."""
+    stored = MPMSBlock(item_id="test").to_web()
+    for event in (
+        {"filter_field_min": "1", "filter_field_max": "2"},
+        {"filter_field_min": ""},
+        {"filter_field_max": ""},
+    ):
+        block = MPMSBlock.from_web(dict(stored))
+        block.process_events({"event_name": "update_settings", **event})
+        stored.update(block.to_web())
+    block = MPMSBlock.from_web(dict(stored))
+    assert block._number("filter_field_min") is None
+    assert block._number("filter_field_max") is None

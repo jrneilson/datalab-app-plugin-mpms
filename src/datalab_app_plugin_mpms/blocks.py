@@ -163,6 +163,11 @@ def _js_update_setting(key: str, block_id: str) -> str:
     )
 
 
+CLEARED = ""
+"""Stored for a cleared numeric setting. datalab drops `None` values when it sends the block
+to the browser, which then keeps (and later sends back) the old value; "" replaces it."""
+
+
 def _parse_float(key: str, value) -> float | None:
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
@@ -194,12 +199,18 @@ class MPMSBlock(DataBlock):
     def plot_functions(self):
         return (self.generate_plot,)
 
+    def _number(self, key: str) -> float | None:
+        """A numeric setting, or None if it is unset or cleared."""
+        value = self.data.get(key)
+        return None if value in (None, CLEARED) else float(value)
+
     @event()
     def update_settings(self, **kwargs):
         """Update one or more block settings from the plot widgets."""
         for key, value in kwargs.items():
             if key in NUMERIC_SETTINGS:
-                self.data[key] = _parse_float(key, value)
+                parsed = _parse_float(key, value)
+                self.data[key] = CLEARED if parsed is None else parsed
             elif key in CHOICE_SETTINGS:
                 allowed = CHOICE_SETTINGS[key]
                 if allowed is not None and value not in allowed:
@@ -216,9 +227,10 @@ class MPMSBlock(DataBlock):
         ):
             if key not in self.data:
                 try:
-                    self.data[key] = _parse_float(key, header.get(header_key))
+                    parsed = _parse_float(key, header.get(header_key))
+                    self.data[key] = CLEARED if parsed is None else parsed
                 except ValueError:
-                    self.data[key] = None
+                    self.data[key] = CLEARED
 
     def _resolve_columns(self, df: pd.DataFrame):
         """Choose the moment, error, temperature and field columns, keeping valid user choices."""
@@ -258,11 +270,11 @@ class MPMSBlock(DataBlock):
         moment_err = None if error_column == NO_ERROR else df[error_column].to_numpy(dtype=float)
 
         sample = {
-            "mass_mg": self.data.get("mass_mg"),
-            "mass_err_mg": self.data.get("mass_err_mg"),
-            "formula_weight": self.data.get("formula_weight"),
-            "density": self.data.get("density"),
-            "density_err": self.data.get("density_err"),
+            "mass_mg": self._number("mass_mg"),
+            "mass_err_mg": self._number("mass_err_mg"),
+            "formula_weight": self._number("formula_weight"),
+            "density": self._number("density"),
+            "density_err": self._number("density_err"),
         }
 
         available_units = []
@@ -298,9 +310,9 @@ class MPMSBlock(DataBlock):
 
         mask = np.ones(len(out), dtype=bool)
         for variable, key in FILTER_KEYS.items():
-            if (lower := self.data.get(f"{key}_min")) is not None:
+            if (lower := self._number(f"{key}_min")) is not None:
                 mask &= out[variable].to_numpy() >= lower
-            if (upper := self.data.get(f"{key}_max")) is not None:
+            if (upper := self._number(f"{key}_max")) is not None:
                 mask &= out[variable].to_numpy() <= upper
 
         return out[mask].reset_index(drop=True), unit
@@ -339,7 +351,7 @@ class MPMSBlock(DataBlock):
         from bokeh.plotting import figure
 
         def text_input(key: str, title: str) -> TextInput:
-            value = self.data.get(key)
+            value = self._number(key)
             widget = TextInput(
                 title=title, value="" if value is None else f"{value:g}", width=WIDGET_WIDTH
             )
